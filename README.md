@@ -1,6 +1,6 @@
-# 3-Year Fantasy Draft Strategy Analyzer
+# -Year Fantasy Draft Strategy Analyzer
 
-Streamlit app using 2023–2025 fantasy draft/performance data.
+Streamlit app using 2022–2025 fantasy draft/performance data.
 
 ## Run locally
 ```bash
