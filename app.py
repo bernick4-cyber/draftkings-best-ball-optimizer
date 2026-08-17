@@ -1196,68 +1196,115 @@ with tab2:
         )
 
 # ------------------------------------------------------------
-# TAB 3
+# TAB 3 — PLAYER VALUE HISTORY
 # ------------------------------------------------------------
 with tab3:
-    st.header("Player Performance vs. Ending-Rank Benchmark")
+    st.header("Player Value History")
     st.caption(
-        "For this section, the PPG benchmark comes from the player's positional Draft Positional Rank — what you paid for him. "
-        "End Rank is then used as a second test. A season counts as Worth It only if the player BOTH "
-        "meets the PPG expectation for his Draft Positional Rank and finishes at or above the positional slot where he was drafted."
+        "Compare up to four players. Expected PPG is based on Draft Positional Rank "
+        "(what you paid), while End Rank is used as the second test for whether the pick was Worth It."
     )
 
     names = sorted(hist["Player"].dropna().unique())
-    player = st.selectbox("Historical Player", names)
-    ph = hist[hist["Player"] == player].copy().sort_values("Year")
+    selected_players = st.multiselect(
+        "Players to compare",
+        options=names,
+        default=[names[0]] if names else [],
+        max_selections=4
+    )
 
-    if ph.empty:
-        st.warning("No historical seasons found.")
+    if not selected_players:
+        st.info("Select at least one player to view history.")
     else:
-        ph["Draft Positional Label"] = (
-            ph["Position"] + ph["Draft Pos Rank"].round().astype("Int64").astype(str)
+        comp = hist[hist["Player"].isin(selected_players)].copy()
+
+        summaries = []
+        for player_name, ph in comp.groupby("Player"):
+            worth_count = int(ph["Overall Worth It"].fillna(False).sum())
+            total_count = int(ph["Overall Worth It"].notna().sum())
+            summaries.append({
+                "Player": player_name,
+                "Seasons": len(ph),
+                "Worth-It Seasons": f"{worth_count}/{total_count}",
+                "Avg Actual PPG": ph["AVG"].mean(),
+                "Avg PPG vs Draft Pos Expectation %": ph["ADP PPG Value %"].mean(),
+                "Avg Rank Return": ph["Positional Rank Return"].mean(),
+                "Beat / Met Draft Pos %": ph["Met Draft Rank"].mean() * 100
+            })
+
+        st.subheader("Comparison Summary")
+        st.dataframe(
+            pd.DataFrame(summaries).round(1),
+            use_container_width=True,
+            hide_index=True
         )
 
-        worth_count = int(ph["Overall Worth It"].fillna(False).sum())
-        total_count = int(ph["Overall Worth It"].notna().sum())
-        avg_value = ph["ADP PPG Value %"].mean()
-
-        x1,x2,x3,x4 = st.columns(4)
-        x1.metric("Worth-It Seasons", f"{worth_count}/{total_count}")
-        x2.metric("Avg PPG vs Draft Pos Expectation", f"{avg_value:.1f}%" if pd.notna(avg_value) else "N/A")
-        avg_rank_return = ph["Positional Rank Return"].mean()
-        x3.metric(
-            "Avg Rank Return",
-            f"{avg_rank_return:+.1f}" if pd.notna(avg_rank_return) else "N/A",
-            help="Positive = finished better than positional draft slot. Negative = finished worse."
+        st.subheader("Actual PPG by Year")
+        ppg_chart = (
+            comp[["Year","Player","AVG"]]
+            .dropna()
+            .assign(Year=lambda d: d["Year"].astype(int).astype(str))
+            .pivot(index="Year", columns="Player", values="AVG")
+            .sort_index()
         )
-        best_year = ph.loc[ph["ADP PPG Value %"].idxmax(), "Year"] if ph["ADP PPG Value %"].notna().any() else "N/A"
-        x4.metric("Best ADP Value Year", str(int(best_year)) if best_year != "N/A" else "N/A")
+        st.line_chart(ppg_chart, x_label="Year", y_label="Actual PPG")
 
-        chart = ph[["Year","AVG","Expected PPG at Cost"]].dropna().copy()
-        chart["Year"] = chart["Year"].astype(int).astype(str)
-        chart = chart.set_index("Year")
-        chart.columns = ["Actual PPG","Expected PPG for Draft Pos Rank"]
-        st.line_chart(chart, x_label="Year", y_label="PPG")
+        st.subheader("PPG vs Draft Pos Expectation")
+        value_chart = (
+            comp[["Year","Player","ADP PPG Value %"]]
+            .dropna()
+            .assign(Year=lambda d: d["Year"].astype(int).astype(str))
+            .pivot(index="Year", columns="Player", values="ADP PPG Value %")
+            .sort_index()
+        )
+        st.line_chart(
+            value_chart,
+            x_label="Year",
+            y_label="PPG vs Draft Pos Expectation %"
+        )
+        st.caption("100% means the player exactly met the PPG expectation for his Draft Positional Rank.")
 
-        # Draft positional rank vs end-of-season rank.
-        # Year is intentionally a string so labels display as 2022, not 2,022.
-        rank_chart = ph[["Year","Draft Pos Rank","RK"]].dropna().copy()
-        rank_chart["Year"] = rank_chart["Year"].astype(int).astype(str)
-        rank_chart = rank_chart.set_index("Year")
-        rank_chart.columns = ["Draft Positional Rank","End Rank"]
-        st.line_chart(rank_chart, x_label="Year", y_label="Rank")
+        st.subheader("Rank Return")
+        rank_return_chart = (
+            comp[["Year","Player","Positional Rank Return"]]
+            .dropna()
+            .assign(Year=lambda d: d["Year"].astype(int).astype(str))
+            .pivot(index="Year", columns="Player", values="Positional Rank Return")
+            .sort_index()
+        )
+        st.bar_chart(
+            rank_return_chart,
+            x_label="Year",
+            y_label="Rank Return"
+        )
+        st.caption("Positive = finished better than Draft Pos Rank. Negative = finished worse.")
 
-        display_cols = [
-            "Year","Position","ADP","Draft Positional Label","RK","AVG",
+        st.subheader("Draft Pos Rank vs End Rank")
+        rank_rows = comp[["Year","Player","Position","Draft Pos Rank","RK"]].dropna().copy()
+        rank_rows["Year"] = rank_rows["Year"].astype(int).astype(str)
+        rank_rows["Draft Pos Rank"] = rank_rows.apply(
+            lambda r: f"{r['Position']}{int(r['Draft Pos Rank'])}", axis=1
+        )
+        rank_rows["End Rank"] = rank_rows.apply(
+            lambda r: f"{r['Position']}{int(r['RK'])}", axis=1
+        )
+        rank_rows = rank_rows.drop(columns=["RK"])
+        st.dataframe(
+            rank_rows.sort_values(["Player","Year"]),
+            use_container_width=True,
+            hide_index=True
+        )
+
+        st.subheader("Detailed Seasons")
+        detail_cols = [
+            "Year","Player","Position","ADP","Draft Positional Label","RK","AVG",
             "Expected PPG at Cost","ADP PPG Value %","Positional Rank Return",
             "Overall Worth It","Worth It Reason","Boom 20","Boom 25","Boom 30"
         ]
-        history_table = ph[[c for c in display_cols if c in ph.columns]].copy()
+        detail = comp[[c for c in detail_cols if c in comp.columns]].copy()
 
-        # Show End Rank with the position prefix while keeping the underlying
-        # numeric RK column unchanged everywhere else for calculations.
-        if "RK" in history_table.columns:
-            history_table["RK"] = history_table.apply(
+        if "RK" in detail.columns:
+            detail["RK"] = detail.apply(
                 lambda r: (
                     f"{r['Position']}{int(r['RK'])}"
                     if pd.notna(r["RK"]) and pd.notna(r["Position"])
@@ -1266,27 +1313,28 @@ with tab3:
                 axis=1
             )
 
-        history_table = history_table.rename(columns={
-            "RK": "End Rank",
+        detail = detail.rename(columns={
             "Draft Positional Label": "Draft Pos Rank",
+            "RK": "End Rank",
             "Expected PPG at Cost": "Expected PPG for Draft Pos Rank",
             "ADP PPG Value %": "PPG vs Draft Pos Expectation %",
             "Positional Rank Return": "Rank Return",
-            "Overall Worth It": "Worth It"
+            "Overall Worth It": "Worth It",
+            "Boom 20": "20+ Point Games",
+            "Boom 25": "25+ Point Games",
+            "Boom 30": "30+ Point Games"
         })
+
         st.dataframe(
-            history_table.round(1),
+            detail.sort_values(["Player","Year"]).round(1),
             use_container_width=True,
             hide_index=True
         )
 
         st.info(
-            "**Worth It requires two tests:** (1) Actual PPG must meet the Finish Points expectation for the player's "
-            "**Draft Positional Rank**, and (2) End Rank must be as good as or better than that draft rank. "
-            "Example: drafted WR6 means the PPG expectation comes from the WR6–10 draft-cost tier. "
-            "If he scores well per game but finishes WR20, the pick is still Not Worth It."
+            "**Worth It requires both:** the player must meet the PPG expectation for his Draft Positional Rank "
+            "and finish at or above that Draft Positional Rank."
         )
-
 
 # ------------------------------------------------------------
 # TAB 4 — ROOKIE ANALYSIS
