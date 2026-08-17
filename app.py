@@ -1218,6 +1218,163 @@ with tab3:
     else:
         comp = hist[hist["Player"].isin(selected_players)].copy()
 
+        st.subheader("🔍 Value Finder")
+        st.caption(
+            "Find the players who exceeded expectations the most based on Draft Positional Rank, "
+            "End Rank, and PPG versus draft-cost expectation."
+        )
+
+        vf1, vf2, vf3, vf4 = st.columns(4)
+
+        value_position = vf1.selectbox(
+            "Position",
+            ["All","QB","RB","WR","TE"],
+            key="value_finder_pos"
+        )
+
+        value_year = vf2.selectbox(
+            "Year",
+            ["All"] + sorted(hist["Year"].dropna().astype(int).unique().tolist()),
+            key="value_finder_year"
+        )
+
+        value_round = vf3.selectbox(
+            "Draft Round",
+            ["All"] + list(range(1,21)),
+            key="value_finder_round"
+        )
+
+        value_sort = vf4.selectbox(
+            "Rank By",
+            [
+                "PPG vs Draft Pos Expectation %",
+                "Rank Return",
+                "Worth It"
+            ],
+            key="value_finder_sort"
+        )
+
+        vf5, vf6 = st.columns(2)
+
+        rookie_filter = vf5.selectbox(
+            "Player Type",
+            ["All","Rookies","Veterans"],
+            key="value_finder_rookie"
+        )
+
+        top_n = vf6.slider(
+            "Show Top",
+            min_value=5,
+            max_value=50,
+            value=15,
+            step=5,
+            key="value_finder_topn"
+        )
+
+        value_df = hist.copy()
+
+        # Calculate a clean 12-team draft round directly from overall ADP.
+        value_df["Calculated Draft Round"] = np.ceil(
+            pd.to_numeric(value_df["ADP"], errors="coerce") / 12.0
+        ).clip(lower=1, upper=20)
+
+        if value_position != "All":
+            value_df = value_df[value_df["Position"] == value_position]
+
+        if value_year != "All":
+            value_df = value_df[value_df["Year"] == int(value_year)]
+
+        if value_round != "All":
+            value_df = value_df[
+                value_df["Calculated Draft Round"] == int(value_round)
+            ]
+
+        if rookie_filter == "Rookies":
+            value_df = value_df[value_df["Is Rookie"]]
+        elif rookie_filter == "Veterans":
+            value_df = value_df[~value_df["Is Rookie"]]
+
+        if value_sort == "PPG vs Draft Pos Expectation %":
+            value_df = value_df.sort_values(
+                "ADP PPG Value %",
+                ascending=False
+            )
+        elif value_sort == "Rank Return":
+            value_df = value_df.sort_values(
+                "Positional Rank Return",
+                ascending=False
+            )
+        else:
+            # Worth It first, then break ties by PPG value and rank return.
+            value_df = value_df.sort_values(
+                ["Overall Worth It","ADP PPG Value %","Positional Rank Return"],
+                ascending=[False,False,False]
+            )
+
+        value_df = value_df.head(top_n).copy()
+
+        if value_df.empty:
+            st.info("No players match those Value Finder filters.")
+        else:
+            value_show = value_df[[
+                "Year","Player","Position","ADP","Draft Pos Rank","RK","AVG",
+                "Expected PPG at Cost","ADP PPG Value %",
+                "Positional Rank Return","Overall Worth It",
+                "Boom 20","Boom 25","Boom 30"
+            ]].copy()
+
+            value_show["Draft Pos Rank"] = value_show.apply(
+                lambda r: (
+                    f"{r['Position']}{int(r['Draft Pos Rank'])}"
+                    if pd.notna(r["Draft Pos Rank"])
+                    else None
+                ),
+                axis=1
+            )
+
+            value_show["RK"] = value_show.apply(
+                lambda r: (
+                    f"{r['Position']}{int(r['RK'])}"
+                    if pd.notna(r["RK"])
+                    else None
+                ),
+                axis=1
+            )
+
+            value_show = value_show.rename(columns={
+                "Draft Pos Rank":"Draft Pos Rank",
+                "RK":"End Rank",
+                "Expected PPG at Cost":"Expected PPG for Draft Pos Rank",
+                "ADP PPG Value %":"PPG vs Draft Pos Expectation %",
+                "Positional Rank Return":"Rank Return",
+                "Overall Worth It":"Worth It",
+                "Boom 20":"20+ Point Games",
+                "Boom 25":"25+ Point Games",
+                "Boom 30":"30+ Point Games"
+            })
+
+            st.dataframe(
+                value_show.round(1),
+                use_container_width=True,
+                hide_index=True
+            )
+
+            if value_sort == "PPG vs Draft Pos Expectation %":
+                leader = value_df.iloc[0]
+                st.success(
+                    f"Biggest PPG value: **{leader['Player']}** delivered "
+                    f"**{leader['ADP PPG Value %']:.1f}%** of the expected production "
+                    f"for his Draft Positional Rank."
+                )
+            elif value_sort == "Rank Return":
+                leader = value_df.iloc[0]
+                st.success(
+                    f"Biggest rank return: **{leader['Player']}** beat his Draft Positional Rank "
+                    f"by **{leader['Positional Rank Return']:+.0f} spots**."
+                )
+
+        st.divider()
+
         summaries = []
         for player_name, ph in comp.groupby("Player"):
             worth_count = int(ph["Overall Worth It"].fillna(False).sum())
@@ -1667,6 +1824,15 @@ The auto-plan now uses these guardrails:
 - A manual player lock can still override the rules if you intentionally want an unusual build
 
 The goal is to prevent the optimizer from chasing raw QB scoring while ignoring the extra weekly lineup opportunities created by RB/WR/TE depth.
+
+### Value Finder
+The Player Value History page includes a Value Finder that can rank players by:
+
+- **PPG vs Draft Pos Expectation %** — who most exceeded the scoring expectation attached to their Draft Positional Rank.
+- **Rank Return** — who finished the most positional spots above where they were drafted.
+- **Worth It** — players who passed both the scoring-expectation test and End-Rank test.
+
+You can filter by position, year, 12-team draft round, and rookie/veteran status.
 
 ### Rookie Analysis
 The Rookie Analysis page filters only player-seasons marked as rookies in the `Rookie?` column.
